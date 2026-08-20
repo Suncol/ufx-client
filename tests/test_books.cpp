@@ -2,6 +2,7 @@
 #include "ufx/coalescer.h"
 #include "ufx/session.h"
 
+#include "../src/biz_error.h"
 #include "../src/listener_guard.h"
 
 #include <cstdio>
@@ -140,6 +141,33 @@ static void TestListenerExceptionGuard() {
     CHECK(unknown_exception == ufx::detail::kListenerCallThrewUnknownException);
 }
 
+static void TestBizResponseErrors() {
+    CHECK(ufx::detail::IsT2SdkErrorReturnCode(1));
+    CHECK(ufx::detail::IsT2SdkErrorReturnCode(-1));
+    CHECK(!ufx::detail::IsT2SdkErrorReturnCode(0));
+    CHECK(!ufx::detail::IsT2SdkErrorReturnCode(2));
+    CHECK(!ufx::detail::IsT2SdkErrorReturnCode(-2));
+
+    CHECK(ufx::detail::ResolveBizErrorCode(true, 100, 200, 2) == 100);
+    CHECK(ufx::detail::ResolveBizErrorCode(true, 0, 200, 2) == 200);
+    CHECK(ufx::detail::ResolveBizErrorCode(false, 0, 0, 2) == 2);
+    CHECK(ufx::detail::ResolveBizErrorCode(false, 0, 0, 0) == -1);
+
+    CHECK(ufx::detail::JoinUfxErrorText("rejected", "risk limit") ==
+          "rejected; MsgDetail: risk limit");
+    CHECK(ufx::detail::JoinUfxErrorText("rejected", "rejected") ==
+          "rejected");
+    CHECK(ufx::detail::JoinUfxErrorText("", "risk limit") == "risk limit");
+    CHECK(ufx::detail::ResolveBizErrorText(
+              true, "rejected", "risk limit", "sdk error", "fallback") ==
+          "rejected; MsgDetail: risk limit");
+    CHECK(ufx::detail::ResolveBizErrorText(
+              false, "invalid header", "", "sdk error", "fallback") ==
+          "sdk error");
+    CHECK(ufx::detail::ResolveBizErrorText(
+              false, "invalid header", "", "", "fallback") == "fallback");
+}
+
 static void TestCumulativeDealIsIdempotent() {
     ufx::OrderBook book;
     const ufx::OrderView* stored = NULL;
@@ -206,6 +234,33 @@ static void TestSnapshotReplayDoesNotRegress() {
     CHECK(!book.UpsertFromPush(same_fill, &stored));
     CHECK(stored != NULL && stored->entrust_state == "8");
     CHECK(stored != NULL && stored->cancel_amount == 500);
+}
+
+static void TestSnapshotPreservesPushMessageType() {
+    ufx::OrderBook book;
+    const ufx::OrderView* stored = NULL;
+    const ufx::OrderView pushed = MakeOrder(101, "a", 0);
+    CHECK(book.UpsertFromPush(pushed, &stored));
+    CHECK(stored != NULL && stored->msgtype == "a");
+
+    ufx::OrderView same_day_snapshot = pushed;
+    same_day_snapshot.msgtype.clear();
+    const ufx::BookChanges<ufx::OrderView> unchanged =
+        book.ReplaceAll(MakeOrderSnapshot(
+            std::vector<ufx::OrderView>(1, same_day_snapshot)));
+    CHECK(unchanged.updated.empty());
+    CHECK(unchanged.removed.empty());
+    stored = book.Find(pushed.entrust_no);
+    CHECK(stored != NULL && stored->msgtype == "a");
+
+    ufx::OrderView next_day_snapshot = same_day_snapshot;
+    ++next_day_snapshot.business_date;
+    const ufx::BookChanges<ufx::OrderView> next_day =
+        book.ReplaceAll(MakeOrderSnapshot(
+            std::vector<ufx::OrderView>(1, next_day_snapshot)));
+    CHECK(next_day.updated.size() == 1);
+    stored = book.Find(pushed.entrust_no);
+    CHECK(stored != NULL && stored->msgtype.empty());
 }
 
 static void TestOrderSnapshotChanges() {
@@ -417,8 +472,10 @@ int main() {
     TestFixedDecimal();
     TestSessionLimitDefaults();
     TestListenerExceptionGuard();
+    TestBizResponseErrors();
     TestCumulativeDealIsIdempotent();
     TestSnapshotReplayDoesNotRegress();
+    TestSnapshotPreservesPushMessageType();
     TestOrderSnapshotChanges();
     TestOrderSnapshotOrderedMerge();
     TestLargeUnchangedOrderSnapshot();

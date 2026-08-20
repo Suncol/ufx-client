@@ -12,7 +12,7 @@ test: $(TEST_BIN)
 
 $(TEST_BIN): tests/test_books.cpp $(CORE_SRC) include/ufx/books.h \
 	include/ufx/coalescer.h include/ufx/listener.h include/ufx/session.h \
-	include/ufx/types.h src/listener_guard.h
+	include/ufx/types.h src/biz_error.h src/listener_guard.h
 	$(CXX) $(CXXFLAGS) -o $@ tests/test_books.cpp $(CORE_SRC)
 
 # Linux x64 with official third-party T2SDK. Copy t2sdk.ini / subscriber.ini / license.dat first.

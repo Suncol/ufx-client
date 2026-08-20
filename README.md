@@ -95,6 +95,8 @@ cmake --build build
 `OnSnapshotBegin/End` 划定边界，并通过 `OnOrderRemoved`、
 `OnPositionRemoved`、`OnAccountRemoved` 显式发布删除。
 运行期回调在 dispatcher 线程串行执行；`Start/Stop` 自身的同步事件在调用线程报告。
+运行中替换 listener 时，新 listener 在完整订单快照成功完成前不会收到订单增量；
+内部账本仍会处理这些增量。
 回调里可以调用 `Stop()`，但不能在回调尚未返回时销毁 `Session` 本身。
 listener 抛出的异常不会越过 Session 的线程或 API 边界；运行期任一回调抛出普通
 异常时，会话会以内部错误码 `-1009` 明确停止，`std::bad_alloc` 仍使用已有的内存

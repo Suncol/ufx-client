@@ -1,5 +1,6 @@
 #include "ufx/session.h"
 
+#include "biz_error.h"
 #include "listener_guard.h"
 #include "t2_util.h"
 #include "ufx/books.h"
@@ -44,6 +45,21 @@ struct OperationStatus {
     OperationStatus(int value, const std::string& text) : code(value), message(text) {}
     bool Ok() const { return code == 0; }
 };
+
+OperationStatus BizResponseFailure(int return_code, int sdk_error_no,
+                                   const std::string& sdk_error_info,
+                                   const t2::ErrorHead* head,
+                                   const std::string& fallback) {
+    const bool head_valid = head != NULL && head->valid;
+    const int head_error_code = head_valid ? head->error_code : 0;
+    const std::string error_msg = head_valid ? head->error_msg : std::string();
+    const std::string msg_detail = head_valid ? head->msg_detail : std::string();
+    return OperationStatus(
+        detail::ResolveBizErrorCode(head_valid, head_error_code, sdk_error_no,
+                                    return_code),
+        detail::ResolveBizErrorText(head_valid, error_msg, msg_detail,
+                                    sdk_error_info, fallback));
+}
 
 enum EventKind {
     kEventPush,
@@ -720,30 +736,39 @@ private:
             return OperationStatus(receive_rc != 0 ? receive_rc : -1,
                                    t2::CStr(session_conn_->GetErrorMsg(receive_rc)));
         }
-        if (response->GetReturnCode() != 0) {
-            const int code = response->GetErrorNo() != 0 ? response->GetErrorNo()
-                                                         : response->GetReturnCode();
-            return OperationStatus(code, t2::CStr(response->GetErrorInfo()));
+        const int return_code = response->GetReturnCode();
+        const int sdk_error_no = response->GetErrorNo();
+        const std::string sdk_error_info = t2::CStr(response->GetErrorInfo());
+        if (detail::IsT2SdkErrorReturnCode(return_code)) {
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "T2SDK login error");
         }
 
         int len = 0;
         const void* content = response->GetContent(len);
         if (content == NULL || len <= 0) {
-            return OperationStatus(-1, "login response has no content");
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "login response has no content");
         }
         IF2UnPacker* unpack = NewUnPacker(const_cast<void*>(content),
                                           static_cast<unsigned int>(len));
         if (unpack == NULL) {
-            return OperationStatus(-1, "login unpack failed");
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "login unpack failed");
         }
         unpack->AddRef();
         const t2::ErrorHead head = t2::ReadHead(unpack);
-        if (!head.valid || head.error_code != 0 || unpack->GetDatasetCount() < 2) {
-            const int code = head.error_code != 0 ? head.error_code : -1;
-            const std::string text = head.error_msg.empty() ? "invalid login response"
-                                                             : head.error_msg;
+        if (!head.valid || head.error_code != 0 || return_code != 0) {
+            const OperationStatus status =
+                BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                   &head, head.valid ? "UFX login error"
+                                                     : "invalid login response");
             unpack->Release();
-            return OperationStatus(code, text);
+            return status;
+        }
+        if (unpack->GetDatasetCount() < 2) {
+            unpack->Release();
+            return OperationStatus(-1, "invalid login response");
         }
         unpack->SetCurrentDatasetByIndex(1);
         if (unpack->GetRowCount() != 1U) {
@@ -829,10 +854,8 @@ private:
         if (subscribe_index_ <= 0) {
             if (response != NULL) {
                 const t2::ErrorHead head = t2::ReadHead(response);
-                status = OperationStatus(head.error_code != 0 ? head.error_code
-                                                              : subscribe_index_,
-                                         head.error_msg.empty() ? "subscription rejected"
-                                                                : head.error_msg);
+                status = BizResponseFailure(subscribe_index_, 0, std::string(),
+                                            &head, "subscription rejected");
             } else {
                 status = OperationStatus(subscribe_index_,
                                          t2::CStr(mc_conn_->GetErrorMsg(subscribe_index_)));
@@ -888,28 +911,32 @@ private:
         if (rc != 0 || response == NULL) {
             return OperationStatus(rc != 0 ? rc : -1, "logout receive failed");
         }
-        if (response->GetReturnCode() != 0) {
-            const int code = response->GetErrorNo() != 0 ? response->GetErrorNo()
-                                                         : response->GetReturnCode();
-            return OperationStatus(code, t2::CStr(response->GetErrorInfo()));
+        const int return_code = response->GetReturnCode();
+        const int sdk_error_no = response->GetErrorNo();
+        const std::string sdk_error_info = t2::CStr(response->GetErrorInfo());
+        if (detail::IsT2SdkErrorReturnCode(return_code)) {
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "T2SDK logout error");
         }
         int len = 0;
         const void* content = response->GetContent(len);
         if (content == NULL || len <= 0) {
-            return OperationStatus(-1, "logout response has no content");
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "logout response has no content");
         }
         IF2UnPacker* unpack = NewUnPacker(const_cast<void*>(content),
                                           static_cast<unsigned int>(len));
         if (unpack == NULL) {
-            return OperationStatus(-1, "logout unpack failed");
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "logout unpack failed");
         }
         unpack->AddRef();
         const t2::ErrorHead head = t2::ReadHead(unpack);
         unpack->Release();
-        if (!head.valid || head.error_code != 0) {
-            return OperationStatus(head.error_code != 0 ? head.error_code : -1,
-                                   head.error_msg.empty() ? "invalid logout response"
-                                                          : head.error_msg);
+        if (!head.valid || head.error_code != 0 || return_code != 0) {
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      &head, head.valid ? "UFX logout error"
+                                                        : "invalid logout response");
         }
         return OperationStatus();
     }
@@ -1341,28 +1368,32 @@ private:
         if (rc != 0 || response == NULL) {
             return OperationStatus(rc != 0 ? rc : -1, "heartbeat receive failed");
         }
-        if (response->GetReturnCode() != 0) {
-            const int code = response->GetErrorNo() != 0 ? response->GetErrorNo()
-                                                         : response->GetReturnCode();
-            return OperationStatus(code, t2::CStr(response->GetErrorInfo()));
+        const int return_code = response->GetReturnCode();
+        const int sdk_error_no = response->GetErrorNo();
+        const std::string sdk_error_info = t2::CStr(response->GetErrorInfo());
+        if (detail::IsT2SdkErrorReturnCode(return_code)) {
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "T2SDK heartbeat error");
         }
         int len = 0;
         const void* content = response->GetContent(len);
         if (content == NULL || len <= 0) {
-            return OperationStatus(-1, "heartbeat response has no content");
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "heartbeat response has no content");
         }
         IF2UnPacker* unpack = NewUnPacker(const_cast<void*>(content),
                                           static_cast<unsigned int>(len));
         if (unpack == NULL) {
-            return OperationStatus(-1, "heartbeat unpack failed");
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      NULL, "heartbeat unpack failed");
         }
         unpack->AddRef();
         const t2::ErrorHead head = t2::ReadHead(unpack);
         unpack->Release();
-        if (!head.valid || head.error_code != 0) {
-            return OperationStatus(head.error_code != 0 ? head.error_code : -1,
-                                   head.error_msg.empty() ? "invalid heartbeat response"
-                                                          : head.error_msg);
+        if (!head.valid || head.error_code != 0 || return_code != 0) {
+            return BizResponseFailure(return_code, sdk_error_no, sdk_error_info,
+                                      &head, head.valid ? "UFX heartbeat error"
+                                                        : "invalid heartbeat response");
         }
         return OperationStatus();
     }
@@ -1727,22 +1758,20 @@ private:
         stat_query_pages_.fetch_add(1);
         stat_query_payload_bytes_.fetch_add(static_cast<uint64_t>(payload_bytes));
 
-        if (event.return_code != 0) {
-            const int code = event.error_no != 0 ? event.error_no : event.return_code;
-            const std::string text = event.error_info.empty()
-                                         ? "T2SDK query transport error"
-                                         : event.error_info;
-            NotifySession(code, text.c_str());
-            CompleteQuery(query_id, false);
-            return;
-        }
-        if (event.func_no != chain->second.func_no) {
-            NotifySession(-1, "query response function does not match request");
+        if (detail::IsT2SdkErrorReturnCode(event.return_code)) {
+            const OperationStatus status =
+                BizResponseFailure(event.return_code, event.error_no,
+                                   event.error_info, NULL, "T2SDK query error");
+            NotifySession(status.code, status.message.c_str());
             CompleteQuery(query_id, false);
             return;
         }
         if (event.payload.empty()) {
-            NotifySession(-1, "query response has no content");
+            const OperationStatus status =
+                BizResponseFailure(event.return_code, event.error_no,
+                                   event.error_info, NULL,
+                                   "query response has no content");
+            NotifySession(status.code, status.message.c_str());
             CompleteQuery(query_id, false);
             return;
         }
@@ -1751,18 +1780,29 @@ private:
             const_cast<char*>(&event.payload[0]),
             static_cast<unsigned int>(event.payload.size()));
         if (unpack == NULL) {
-            NotifySession(-1, "query unpack failed");
+            const OperationStatus status =
+                BizResponseFailure(event.return_code, event.error_no,
+                                   event.error_info, NULL, "query unpack failed");
+            NotifySession(status.code, status.message.c_str());
             CompleteQuery(query_id, false);
             return;
         }
         unpack->AddRef();
         const t2::ErrorHead head = t2::ReadHead(unpack);
-        if (!head.valid || head.error_code != 0) {
-            const int code = head.error_code != 0 ? head.error_code : -1;
-            const std::string text = head.error_msg.empty() ? "invalid query response"
-                                                             : head.error_msg;
+        if (!head.valid || head.error_code != 0 || event.return_code != 0) {
+            const OperationStatus status =
+                BizResponseFailure(event.return_code, event.error_no,
+                                   event.error_info, &head,
+                                   head.valid ? "UFX query error"
+                                              : "invalid query response");
             unpack->Release();
-            NotifySession(code, text.c_str());
+            NotifySession(status.code, status.message.c_str());
+            CompleteQuery(query_id, false);
+            return;
+        }
+        if (event.func_no != chain->second.func_no) {
+            unpack->Release();
+            NotifySession(-1, "query response function does not match request");
             CompleteQuery(query_id, false);
             return;
         }
@@ -2417,8 +2457,11 @@ private:
         if (!orders_.UpsertFromPush(update, &stored)) {
             return;
         }
-        const std::shared_ptr<IMarketListener> listener = Listener(NULL);
-        if (listener && stored != NULL) {
+        uint64_t listener_epoch = 0;
+        const std::shared_ptr<IMarketListener> listener = Listener(&listener_epoch);
+        // SetListener advances the epoch before scheduling its full reconcile.
+        if (listener && stored != NULL &&
+            listener_epoch == order_listener_epoch_) {
             const int64_t callback_started_ms = NowMs();
             InvokeListener("OnOrderUpdate", [&] {
                 listener->OnOrderUpdate(*stored);

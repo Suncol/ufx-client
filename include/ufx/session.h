@@ -106,7 +106,9 @@ public:
 
     // A shared listener remains alive through any callback already in progress.
     // Runtime callbacks are serialized on the dispatcher thread. Start/Stop may
-    // report their own synchronous result on the calling thread.
+    // report their own synchronous result on the calling thread. A listener
+    // installed while running receives order increments only after its first
+    // complete orders snapshot.
     void SetListener(const std::shared_ptr<IMarketListener>& listener);
     int Start();
     void Stop();

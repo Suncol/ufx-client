@@ -198,7 +198,12 @@ BookChanges<OrderView> OrderBook::ReplaceAll(OrderSnapshot orders) {
             continue;
         }
 
-        if (previous->second.business_date == current->second.business_date &&
+        const bool same_business_date =
+            previous->second.business_date == current->second.business_date;
+        if (same_business_date && current->second.msgtype.empty()) {
+            current->second.msgtype = previous->second.msgtype;
+        }
+        if (same_business_date &&
             previous->second.deal_amount == current->second.deal_amount) {
             current->second.last_fill_amount = previous->second.last_fill_amount;
             current->second.deal_no = previous->second.deal_no;
