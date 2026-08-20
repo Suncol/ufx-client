@@ -1,0 +1,13 @@
+# Local build outputs
+/build/
+/tests/test_books
+/ufx_demo
+/src/*.o
+
+# Deployment-specific configuration and credentials
+/t2sdk.ini
+/subscriber.ini
+/license.dat
+
+# macOS metadata
+.DS_Store

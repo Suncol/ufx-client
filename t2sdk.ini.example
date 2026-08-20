@@ -1,0 +1,12 @@
+[t2sdk]
+license_file=license.dat
+servers=127.0.0.1:9003
+login_name=
+init_recv_buf_size=102400
+init_send_buf_size=102400
+send_queue_size=100000
+heartbeat_time=30
+auto_reconnect=1
+
+[safe]
+safe_level=none

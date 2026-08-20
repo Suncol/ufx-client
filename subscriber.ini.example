@@ -1,0 +1,27 @@
+[t2sdk]
+license_file=license.dat
+; ar_mc T2 port, must NOT be the same as as_ufx
+servers=127.0.0.1:9009
+login_name=
+init_recv_buf_size=102400
+init_send_buf_size=102400
+send_queue_size=100000
+auto_reconnect=1
+
+[safe]
+safe_level=none
+
+[mc]
+client_name=ufx_client
+
+[subcribe]
+biz_name=ufx_client
+topic_name=ufx_topic
+is_rebulid=true
+is_replace=false
+send_interval=0
+; Only filter operator. Do not filter msgtype, or you will miss confirm/deal.
+filter_count=1
+filter_name1=operator_no
+filter_value1=1000
+return_count=0
